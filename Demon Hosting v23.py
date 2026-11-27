@@ -918,10 +918,65 @@ def run_flask():
         SHUTDOWN_EVENT.wait(delay)
 
 
+# --- Self pinger: hits the bot's own public URL so free hosts (Render etc.) do not put it to sleep ---
+# Env: PING_URLS (comma separated; default RENDER_EXTERNAL_URL or http://127.0.0.1:PORT/health), PING_SECONDS (default 30)
+def _ping_targets():
+    raw = os.environ.get('PING_URLS', '').strip()
+    urls = [u.strip() for u in raw.split(',') if u.strip()]
+    if not urls:
+        ext = os.environ.get('RENDER_EXTERNAL_URL', '').strip().rstrip('/')
+        urls = [ext + '/health'] if ext else ['http://127.0.0.1:%s/health' % HEALTH_PORT]
+    return urls
+
+
+def run_pinger():
+    try:
+        seconds = max(10, int(os.environ.get('PING_SECONDS', '30')))
+    except ValueError:
+        seconds = 30
+    SHUTDOWN_EVENT.wait(20)                                   # let the web server come up first
+    while not SHUTDOWN_EVENT.is_set():
+        for url in _ping_targets():
+            try:
+                r = requests.get(url, timeout=20)
+                logger.info("Pinger: %s -> %s", url, r.status_code)
+            except Exception as e:
+                logger.warning("Pinger: %s failed (%s)", url, type(e).__name__)
+        SHUTDOWN_EVENT.wait(seconds)
+
+
+# --- Keep-busy: small steady CPU + disk + network activity so an idle-detecting host (Box etc.) sees the machine as active ---
+# Env: KEEP_BUSY (default 1, set 0 to turn off), BUSY_SECONDS (default 10)
+def run_keepbusy():
+    if os.environ.get('KEEP_BUSY', '1').strip() in ('0', 'false', 'no', 'off'):
+        return
+    try:
+        every = max(5, int(os.environ.get('BUSY_SECONDS', '10')))
+    except ValueError:
+        every = 10
+    beat_file = os.path.join(tempfile.gettempdir(), 'demon.txt')
+    SHUTDOWN_EVENT.wait(15)
+    while not SHUTDOWN_EVENT.is_set():
+        try:
+            end = time.time() + 0.5                       # about half a second of real CPU work
+            h = b'x'
+            while time.time() < end:
+                h = hashlib.sha256(h).digest()
+            with open(beat_file, 'w') as f:                # disk write
+                f.write(str(time.time()))
+            requests.get('https://www.google.com/generate_204', timeout=10)   # outbound network
+        except Exception as e:
+            logger.debug("Keep-busy tick failed (%s)", type(e).__name__)
+        SHUTDOWN_EVENT.wait(every)
+
+
 def keep_alive():
+    Thread(target=run_keepbusy, name="keep-busy", daemon=True).start()
     t = Thread(target=run_flask, name="keepalive-web", daemon=True)
     t.start()
     logger.info("Keep-alive web server starting on port %s (health page: /health)", HEALTH_PORT)
+    Thread(target=run_pinger, name="self-pinger", daemon=True).start()
+    logger.info("Self pinger started (env PING_URLS / PING_SECONDS)")
 
 
 # --- Bot with safer Telegram calls -------------------------------------------
