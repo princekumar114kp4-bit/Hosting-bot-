@@ -207,7 +207,7 @@ REFERRAL_REWARD_DAYS = max(1, _env_int('REFERRAL_REWARD_DAYS', 7))
 PENDING_REFERRALS = {}                   # new user id -> referrer id, kept until the user passes the channel check
 BOT_USERNAME_CACHE = {'name': ''}
 HOST_START_TIME = time.time()
-BOT_VERSION = 'v22'                      # shown in the start-up log, /health and Bot Information: tells which code really runs
+BOT_VERSION = 'v23'                      # shown in the start-up log, /health and Bot Information: tells which code really runs
 SHUTDOWN_EVENT = threading.Event()
 HEALTH_STATE = {'last_poll_start': None, 'poll_restarts': 0, 'last_error': ''}
 user_subscriptions = {}
@@ -221,7 +221,7 @@ user_limits = {}  # Custom limits per user
 bot_locked = False
 
 # --- Admin user-management extras (temp ban, suspend, auto-suspend, file search) ---
-TEMP_BAN_MAX_DAYS = 365                                              # longest temporary ban an admin can set
+TEMP_BAN_MAX_DAYS = 3                                             # longest temporary ban an admin can set
 TEMP_BAN_CHECK_SECONDS = 60                                          # how often expired temporary bans are lifted
 TEMP_BAN_STARTED = False
 FILE_PREVIEW_LINES = 200                                             # lines of a file shown by Preview
@@ -7057,12 +7057,17 @@ def gh_prepare(info, work_dir):
     return dest
 
 
+_GH_REPLACEABLE = ('requirements.txt', 'package.json', 'package-lock.json')
+
+
 def _gh_top_clashes(user_id, files):
     """Top-level names of the picked files that already exist in the user's storage."""
     folder = get_user_folder(user_id)
     known = {item[0] for item in user_files.get(user_id, [])}
     tops = sorted({rel.split('/')[0] for rel, _, _ in files})
-    return [name for name in tops if name in known or os.path.lexists(os.path.join(folder, name))]
+    # requirements.txt / package files are replaced by the newest deploy instead of blocking it
+    return [name for name in tops if name not in _GH_REPLACEABLE
+            and (name in known or os.path.lexists(os.path.join(folder, name)))]
 
 
 def _gh_skip_summary(skipped):
@@ -7648,6 +7653,12 @@ def _process_zip_file_impl(zip_path, user_id, user_folder, file_name_zip, messag
 
         logger.info(f"Moving extracted files from {extract_dir} to {user_folder}")
         moved_count = 0
+        if manifest:                                   # GitHub deploy: an old requirements.txt etc. is replaced, not a blocker
+            for item_name in os.listdir(extract_dir):
+                old_path = os.path.join(user_folder, item_name)
+                if item_name in _GH_REPLACEABLE and os.path.isfile(old_path) and not os.path.islink(old_path):
+                    os.remove(old_path)
+                    logger.info("GitHub deploy: replaced old %s for user %s", item_name, user_id)
         for item_name in os.listdir(extract_dir):
             dest_path = os.path.join(user_folder, item_name)
             if os.path.exists(dest_path):
