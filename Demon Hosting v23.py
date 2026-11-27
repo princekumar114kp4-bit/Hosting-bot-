@@ -7066,7 +7066,7 @@ def _gh_top_clashes(user_id, files):
     known = {item[0] for item in user_files.get(user_id, [])}
     tops = sorted({rel.split('/')[0] for rel, _, _ in files})
     # requirements.txt / package files are replaced by the newest deploy instead of blocking it
-    return [name for name in tops if name not in _GH_REPLACEABLE
+    return [name for name in tops if name not in _GH_REPLACEABLE and not name.lower().startswith('readme')
             and (name in known or os.path.lexists(os.path.join(folder, name)))]
 
 
@@ -7625,6 +7625,11 @@ def _process_zip_file_impl(zip_path, user_id, user_folder, file_name_zip, messag
             _gh_apply_update(extract_dir, manifest, user_id, user_folder, message, state)
             return
 
+        if manifest:                                   # GitHub deploy: README files are not kept
+            for _n in os.listdir(extract_dir):
+                _p = os.path.join(extract_dir, _n)
+                if _n.lower().startswith('readme') and os.path.isfile(_p) and not os.path.islink(_p):
+                    os.remove(_p)
         extracted_items = os.listdir(extract_dir)
         py_files = [f for f in extracted_items if f.endswith('.py')]
         js_files = [f for f in extracted_items if f.endswith('.js')]
@@ -7633,6 +7638,10 @@ def _process_zip_file_impl(zip_path, user_id, user_folder, file_name_zip, messag
 
         if not _install_zip_deps(extract_dir, message, user_id, safe=bool(manifest)):
             return
+        if manifest:                                   # GitHub deploy: packages are installed, so requirements.txt is not kept
+            _rq = os.path.join(extract_dir, 'requirements.txt')
+            if os.path.isfile(_rq) and not os.path.islink(_rq):
+                os.remove(_rq)
 
         main_script_name = None; file_type = None
         preferred_py = ['main.py', 'bot.py', 'app.py']; preferred_js = ['index.js', 'main.js', 'bot.js', 'app.js']
